@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import sys
 import uuid
 from datetime import datetime
@@ -9,6 +10,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 from agent import Agent
+from opencode_adapter import OpenCodeAdapter
 from subagents import build_team_prompt, detect_specialists
 
 try:
@@ -29,7 +31,12 @@ BASE_URL = os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434/v1"
 API_KEY = os.getenv("OLLAMA_API_KEY", "ollama")
 APP_DIR = Path(__file__).resolve().parent
 WORKSPACE = Path(os.getenv("ASSISTANT_WORKSPACE") or APP_DIR).resolve()
-DATA_DIR = Path(os.getenv("ASSISTANT_DATA_DIR") or (APP_DIR / ".jarvis_data"))
+LEGACY_DATA_DIR = APP_DIR / ".jarvis_data"
+DATA_DIR = Path(os.getenv("ASSISTANT_DATA_DIR") or (APP_DIR / ".milo_data"))
+if not DATA_DIR.exists() and LEGACY_DATA_DIR.exists():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    for old_file in LEGACY_DATA_DIR.glob("*.json"):
+        shutil.copy2(old_file, DATA_DIR / old_file.name)
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CONVERSATIONS_FILE = DATA_DIR / "conversations.json"
 SETTINGS_FILE = DATA_DIR / "settings.json"
@@ -68,7 +75,6 @@ class AssistantWorker(QObject):
                 if message.get("role") in {"user", "assistant"}:
                     agent.messages.append({"role": message["role"], "content": message["content"]})
 
-            # CRITICO: el mensaje actual debe entrar al contexto del modelo.
             agent.messages.append({"role": "user", "content": self.request})
 
             listing = agent.list_files(".", recursive=True)
@@ -81,21 +87,16 @@ class AssistantWorker(QObject):
             self.progress.emit(f"Especialistas: {', '.join(a.name for a in team)}")
 
             client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
-            for round_number in range(8):
-                self.progress.emit(f"Ronda {round_number + 1}: el modelo decide la siguiente accion…")
-                response = client.responses.create(
-                    model=MODEL,
-                    input=agent.messages,
-                    tools=agent.tools,
-                    instructions=instructions,
-                )
+            for round_number in range(12):
+                self.progress.emit(f"Ronda {round_number + 1}: planificando y ejecutando…")
+                response = client.responses.create(model=MODEL, input=agent.messages, tools=agent.tools, instructions=instructions)
                 calls, text = agent.process_response(response)
                 if not calls:
                     answer = text or getattr(response, "output_text", "") or "No hubo una respuesta util del modelo."
                     self.finished.emit(answer, ", ".join(a.name for a in team))
                     return
                 agent.add_tool_outputs(calls)
-            self.finished.emit("Detuve el proceso despues de 8 rondas para evitar un ciclo infinito.", ", ".join(a.name for a in team))
+            self.finished.emit("Detuve el proceso despues de 12 rondas para evitar un ciclo infinito.", ", ".join(a.name for a in team))
         except Exception as exc:
             self.error.emit(f"{type(exc).__name__}: {exc}")
 
@@ -106,15 +107,34 @@ class AssistantWorker(QObject):
     def _instructions(self):
         language = self.settings.get("language", "Español")
         personality = self.settings.get("personality", "Preciso")
-        return f"""Eres un agente local de programacion. Idioma: {language}. Personalidad: {personality}.
+        return f"""Eres Milo, un agente local de programacion. Idioma: {language}. Personalidad: {personality}.
 Tu trabajo NO es solo conversar: debes usar las herramientas para hacer cambios reales en el workspace.
-Para 'creame un juego/app/pagina de X', inspecciona, crea todos los archivos necesarios, conecta los archivos y valida el resultado.
-El workspace real es el directorio que recibe el agente. Nunca digas que creaste algo si una herramienta no lo confirma.
-Antes de modificar un proyecto existente, inspecciona sus archivos. Repara errores usando evidencia real de las herramientas.
-Usa validate_project en proyectos de varios archivos y validate_python cuando corresponda.
-Si una herramienta devuelve ERROR, no continues fingiendo: analiza el error y corrige el problema.
-No inventes APIs, dependencias, archivos, capturas ni resultados.
-Al terminar informa que se hizo basandote en las operaciones realmente ejecutadas."""
+
+CREAR PROYECTOS:
+- Cuando el usuario diga 'creame un juego/app/pagina/programa', primero usa create_project con un nombre basado en lo que pidió, por ejemplo 'Juego de Carreras'.
+- Todos los archivos nuevos deben quedar dentro de esa carpeta del proyecto.
+- Crea una estructura completa y coherente, no un unico archivo de ejemplo si el proyecto necesita varios.
+- Para Python/Pygame usa normalmente main.py y separa módulos/assets cuando mejore la estructura.
+- Si faltan assets, crea la carpeta assets y usa placeholders generados por código cuando sea posible.
+
+CORREGIR:
+- Si el usuario dice 'corrigelo', 'arreglalo' o pide cambios, inspecciona primero los archivos del proyecto existente y modifica esos archivos reales.
+- No crees otro proyecto paralelo para corregir el actual.
+- Usa los errores reales de las herramientas para decidir qué reparar.
+
+VERIFICACION:
+- Usa validate_project al terminar proyectos de varios archivos.
+- Usa validate_python cuando corresponda.
+- No afirmes que algo funciona sin comprobarlo.
+- Si una herramienta devuelve ERROR, corrige y vuelve a validar.
+- No inventes APIs, dependencias, archivos, assets ni resultados.
+
+OPENCODE:
+- OpenCode es un motor auxiliar opcional. Si esta instalado, puedes usar run_opencode para reparaciones complejas.
+- Despues de usar OpenCode, inspecciona y valida los cambios con las herramientas de Milo.
+- Si OpenCode no esta instalado, continua usando las herramientas propias de Milo.
+
+El resultado final debe basarse en operaciones realmente ejecutadas y verificadas."""
 
 
 class MessageBubble(QFrame):
@@ -123,7 +143,7 @@ class MessageBubble(QFrame):
         self.setObjectName("userBubble" if role == "user" else "assistantBubble")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 14, 18, 14)
-        title = QLabel("Tú" if role == "user" else "Asistente")
+        title = QLabel("Tú" if role == "user" else "Milo")
         title.setObjectName("messageTitle")
         body = QLabel(text)
         body.setWordWrap(True)
@@ -161,7 +181,7 @@ class SettingsDialog(QDialog):
 class AssistantWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Asistente · Local Developer Hub")
+        self.setWindowTitle("Milo · Local Developer Hub")
         self.resize(1380, 860)
         self.settings = load_json(SETTINGS_FILE, DEFAULT_SETTINGS)
         self.conversations = load_json(CONVERSATIONS_FILE, {})
@@ -178,13 +198,15 @@ class AssistantWindow(QMainWindow):
 
         sidebar = QFrame(); sidebar.setObjectName("sidebar"); sidebar.setFixedWidth(285)
         side = QVBoxLayout(sidebar); side.setContentsMargins(14, 16, 14, 14)
-        brand = QLabel("LOCAL ASSISTANT"); brand.setObjectName("brand"); side.addWidget(brand)
-        sub = QLabel("DEVELOPER HUB"); sub.setObjectName("brandSub"); side.addWidget(sub); side.addSpacing(14)
+        brand = QLabel("MILO"); brand.setObjectName("brand"); side.addWidget(brand)
+        sub = QLabel("LOCAL DEVELOPER HUB"); sub.setObjectName("brandSub"); side.addWidget(sub); side.addSpacing(14)
         new_btn = QPushButton("＋  Nueva conversación"); new_btn.clicked.connect(self.new_conversation); new_btn.setObjectName("newChat"); side.addWidget(new_btn)
         search = QLineEdit(); search.setPlaceholderText("Buscar conversaciones…"); search.textChanged.connect(self.filter_history); side.addWidget(search)
         self.history_list = QListWidget(); self.history_list.itemClicked.connect(self.select_conversation); side.addWidget(self.history_list, 1)
         settings_btn = QPushButton("⚙  Configuración"); settings_btn.clicked.connect(self.open_settings); settings_btn.setObjectName("sideButton"); side.addWidget(settings_btn)
-        status = QLabel(f"●  Ollama · {MODEL}"); status.setObjectName("status"); side.addWidget(status)
+        opencode = OpenCodeAdapter(WORKSPACE)
+        oc_state = "disponible" if opencode.available else "no instalado"
+        status = QLabel(f"●  Ollama · {MODEL}\n●  OpenCode · {oc_state}"); status.setObjectName("status"); side.addWidget(status)
         main.addWidget(sidebar)
 
         center = QWidget(); center_layout = QVBoxLayout(center); center_layout.setContentsMargins(0, 0, 0, 0); center_layout.setSpacing(0)
@@ -198,9 +220,9 @@ class AssistantWindow(QMainWindow):
         self.messages_widget = QWidget(); self.messages_layout = QVBoxLayout(self.messages_widget); self.messages_layout.setContentsMargins(40, 28, 40, 28); self.messages_layout.setSpacing(14); self.messages_layout.addStretch(); self.scroll.setWidget(self.messages_widget); center_layout.addWidget(self.scroll, 1)
 
         composer = QFrame(); composer.setObjectName("composer"); cl = QVBoxLayout(composer); cl.setContentsMargins(24, 12, 24, 16)
-        self.prompt = QTextEdit(); self.prompt.setPlaceholderText("Describe lo que quieres construir…"); self.prompt.setFixedHeight(92); self.prompt.installEventFilter(self); cl.addWidget(self.prompt)
+        self.prompt = QTextEdit(); self.prompt.setPlaceholderText("Describe lo que quieres construir o corregir…"); self.prompt.setFixedHeight(92); self.prompt.installEventFilter(self); cl.addWidget(self.prompt)
         row = QHBoxLayout(); hint = QLabel("Enter para enviar · Shift+Enter para nueva línea"); hint.setObjectName("muted"); row.addWidget(hint); row.addStretch()
-        self.send = QPushButton("Crear  ↵"); self.send.setObjectName("send"); self.send.clicked.connect(self.send_prompt); row.addWidget(self.send); cl.addLayout(row); center_layout.addWidget(composer)
+        self.send = QPushButton("Ejecutar  ↵"); self.send.setObjectName("send"); self.send.clicked.connect(self.send_prompt); row.addWidget(self.send); cl.addLayout(row); center_layout.addWidget(composer)
         main.addWidget(center, 1)
 
         inspector = QFrame(); inspector.setObjectName("inspector"); inspector.setFixedWidth(300)
@@ -212,7 +234,7 @@ class AssistantWindow(QMainWindow):
         il.addWidget(QLabel("WORKSPACE", objectName="section"))
         workspace_label = QLabel(str(WORKSPACE)); workspace_label.setObjectName("visionCard"); workspace_label.setWordWrap(True); il.addWidget(workspace_label)
         il.addWidget(QLabel("VISIÓN", objectName="section"))
-        vision = QLabel("Captura y control de pantalla todavía no están activos. Esta capa se añadirá aparte; no se simularán capacidades que el modelo no tiene."); vision.setObjectName("visionCard"); vision.setWordWrap(True); il.addWidget(vision)
+        vision = QLabel("La visión/control de pantalla se añadirá como una capa separada. Milo no simula capacidades que el modelo no tiene."); vision.setObjectName("visionCard"); vision.setWordWrap(True); il.addWidget(vision)
         main.addWidget(inspector)
         self.setCentralWidget(root)
 
@@ -270,7 +292,7 @@ class AssistantWindow(QMainWindow):
         data = self.conversations[self.current_id]
         if not data["messages"]: data["title"] = text[:42] + ("…" if len(text) > 42 else "")
         data["messages"].append({"role": "user", "content": text}); data["updated"] = datetime.now().isoformat(); self.save_state(); self.refresh_history(); self.render_messages(); self.prompt.clear()
-        self.send.setEnabled(False); self.send.setText("Trabajando…"); self.project_status.setText("Ejecutando herramientas reales en el workspace…"); self.activity.clear(); self.activity.addItem(f"Workspace: {WORKSPACE}")
+        self.send.setEnabled(False); self.send.setText("Trabajando…"); self.project_status.setText("Milo está ejecutando herramientas reales en el workspace…"); self.activity.clear(); self.activity.addItem(f"Workspace: {WORKSPACE}")
         history = data["messages"][:-1]
         self.thread = QThread(); self.worker = AssistantWorker(history, text, self.settings.copy()); self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run); self.worker.progress.connect(self.on_progress); self.worker.finished.connect(self.on_finished); self.worker.error.connect(self.on_error); self.thread.start()
@@ -280,13 +302,13 @@ class AssistantWindow(QMainWindow):
         self.activity.addItem(message); self.activity.scrollToBottom()
 
     def on_finished(self, answer, team):
-        data = self.conversations[self.current_id]; data["messages"].append({"role": "assistant", "content": answer}); data["updated"] = datetime.now().isoformat(); self.save_state(); self.team_label.setText(team.replace(", ", " · ") or "Sin especialista"); self.activity.addItem("✓ Proceso terminado"); self.project_status.setText("Proceso terminado. Los cambios mostrados como OK fueron ejecutados y verificados."); self.render_messages(); self.finish_worker()
+        data = self.conversations[self.current_id]; data["messages"].append({"role": "assistant", "content": answer}); data["updated"] = datetime.now().isoformat(); self.save_state(); self.team_label.setText(team.replace(", ", " · ") or "Sin especialista"); self.activity.addItem("✓ Proceso terminado"); self.project_status.setText("Proceso terminado. Las operaciones marcadas como OK fueron ejecutadas y verificadas."); self.render_messages(); self.finish_worker()
 
     def on_error(self, error):
-        self.activity.addItem("✕ ERROR · " + error); self.project_status.setText("El proceso falló. No se marcará como creado algo que no se pudo ejecutar."); self.finish_worker(); QMessageBox.warning(self, "Error del asistente", error)
+        self.activity.addItem("✕ ERROR · " + error); self.project_status.setText("El proceso falló. Milo no marcará como creado algo que no pudo ejecutar."); self.finish_worker(); QMessageBox.warning(self, "Error de Milo", error)
 
     def finish_worker(self):
-        self.send.setEnabled(True); self.send.setText("Crear  ↵")
+        self.send.setEnabled(True); self.send.setText("Ejecutar  ↵")
         if self.thread:
             self.thread.quit(); self.thread.wait(1000)
         self.worker = None; self.thread = None
@@ -300,7 +322,7 @@ class AssistantWindow(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
-    app.setApplicationName("Local Developer Assistant")
+    app.setApplicationName("Milo · Local Developer Assistant")
     app.setFont(QFont("Segoe UI", 10))
     window = AssistantWindow(); window.show()
     return app.exec()
