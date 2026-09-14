@@ -1,12 +1,16 @@
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 
 class Agent:
-    """Agente local para crear, probar y reparar proyectos de software."""
+    """Herramientas locales para construir, validar y reparar proyectos."""
+
+    IGNORED_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", ".mypy_cache", ".pytest_cache"}
+    TEXT_LIMIT = 16000
 
     def __init__(self, workspace=None):
         self.workspace = Path(workspace or os.getenv("ASSISTANT_WORKSPACE") or os.getcwd()).resolve()
@@ -16,33 +20,23 @@ class Agent:
 
     def _system_prompt(self):
         return """
-Eres un agente de programacion local en español. Tu trabajo NO es solo escribir codigo en el chat:
-debes construir proyectos funcionales dentro del workspace usando las herramientas.
+Eres un agente local de programacion. Construyes proyectos reales usando herramientas.
 
-REGLAS IMPORTANTES PARA EVITAR CODIGO INCOHERENTE:
-1. Antes de modificar un proyecto existente, usa list_files y lee los archivos relevantes.
-2. Si la peticion es un proyecto nuevo, primero piensa en una arquitectura simple: archivos, responsabilidades y como se conectan.
-3. No inventes APIs, funciones, imports, variables globales, rutas ni nombres de archivos que no existan.
-4. Mantén consistencia entre archivos: si HTML llama a script.js, ese archivo debe existir; si Python importa un modulo local, créalo y comprueba su nombre.
-5. No agregues dependencias externas si no son necesarias. Si una dependencia es necesaria, escribe los requisitos correspondientes.
-6. No mezcles sintaxis de lenguajes. Cada archivo debe contener exclusivamente el lenguaje indicado por su extension.
-7. Usa nombres claros y consistentes. No cambies una funcion o variable en un archivo sin actualizar sus usos.
-8. Para cambios pequeños, usa replace_in_file. Para un archivo nuevo o una reescritura justificada, usa write_file.
-9. Después de crear o modificar Python, ejecuta validate_python. Si falla, lee el error, corrige el archivo y vuelve a validar.
-10. Si el proyecto tiene varios archivos, revisa list_files al terminar y comprueba que existan todos los archivos necesarios.
-11. No declares que un proyecto funciona si no lo comprobaste. Si una parte no puede ejecutarse localmente, dilo.
-12. No borres archivos salvo que el usuario lo pida o sea imprescindible para corregir el proyecto.
-13. Si el usuario pide HTML/CSS/JS, crea una estructura completa y coherente. Si pide un juego, incluye HTML, CSS y JS cuando corresponda, y conecta correctamente los scripts.
-14. Si el usuario pide Python, prioriza codigo ejecutable, manejo de errores y una estructura sencilla antes que codigo enorme.
-15. Evita generar cientos de lineas sin necesidad. Es mejor un proyecto pequeño que funcione que uno enorme e incoherente.
-16. Cuando recibas un error de una herramienta, úsalo como evidencia para corregir el problema; no lo ignores.
-17. Trabaja dentro del workspace y usa rutas relativas.
+- Inspecciona antes de modificar.
+- En proyectos nuevos usa una arquitectura pequena y coherente.
+- Mantén referencias entre archivos correctas.
+- No inventes APIs, dependencias, assets ni resultados.
+- Si el usuario pide un juego, app o pagina, crea el proyecto y no solo un ejemplo de codigo.
+- Si faltan sprites, sonidos o imagenes, crea carpetas de recursos y explica exactamente donde ponerlos.
+- Puedes usar placeholders generados por codigo cuando permitan probar el proyecto sin assets externos.
+- Usa validate_project al terminar proyectos de varios archivos.
+- Usa validate_python y run_python cuando corresponda y sea seguro.
+- No ejecutes programas interactivos que esperen entrada indefinidamente.
+- Repara errores basandote en los mensajes reales de las herramientas.
+- No afirmes que algo funciona sin comprobarlo.
+- No borres archivos salvo que sea necesario o solicitado.
 
-FLUJO RECOMENDADO:
-- Proyecto existente: inspeccionar -> entender -> modificar -> validar -> reparar -> responder.
-- Proyecto nuevo: diseñar -> crear archivos -> validar -> reparar -> revisar estructura -> responder.
-
-Tu respuesta final debe ser breve y decir qué archivos se crearon/modificaron y qué comprobaciones se hicieron.
+El modelo de lenguaje es la inteligencia principal. No necesitas una red neuronal adicional para programar: solo usa modelos adicionales si el usuario pide explicitamente una tarea de ML.
 """.strip()
 
     def _safe_path(self, path):
@@ -57,75 +51,28 @@ Tu respuesta final debe ser breve y decir qué archivos se crearon/modificaron y
 
     def setup_tools(self):
         self.tools = [
-            {
-                "type": "function", "name": "list_files",
-                "description": "Inspecciona la estructura del workspace. Usa recursive=true para proyectos completos.",
-                "parameters": {"type": "object", "properties": {
-                    "directory": {"type": "string"},
-                    "recursive": {"type": "boolean"}
-                }, "required": [], "additionalProperties": False}
-            },
-            {
-                "type": "function", "name": "read_file",
-                "description": "Lee un archivo UTF-8 existente. Obligatorio antes de modificar codigo existente cuando el contenido sea relevante.",
-                "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False}
-            },
-            {
-                "type": "function", "name": "write_file",
-                "description": "Crea o reemplaza un archivo UTF-8 completo. Úsalo para archivos nuevos o reescrituras necesarias.",
-                "parameters": {"type": "object", "properties": {
-                    "path": {"type": "string"}, "content": {"type": "string"}
-                }, "required": ["path", "content"], "additionalProperties": False}
-            },
-            {
-                "type": "function", "name": "replace_in_file",
-                "description": "Hace un cambio puntual en un archivo existente sin reescribirlo completo.",
-                "parameters": {"type": "object", "properties": {
-                    "path": {"type": "string"}, "old_text": {"type": "string"},
-                    "new_text": {"type": "string"}, "replace_all": {"type": "boolean"}
-                }, "required": ["path", "old_text", "new_text"], "additionalProperties": False}
-            },
-            {
-                "type": "function", "name": "append_file",
-                "description": "Agrega contenido al final de un archivo UTF-8.",
-                "parameters": {"type": "object", "properties": {
-                    "path": {"type": "string"}, "content": {"type": "string"}
-                }, "required": ["path", "content"], "additionalProperties": False}
-            },
-            {
-                "type": "function", "name": "make_directory",
-                "description": "Crea una carpeta dentro del workspace.",
-                "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False}
-            },
-            {
-                "type": "function", "name": "delete_file",
-                "description": "Elimina un archivo. Solo cuando sea necesario para cumplir claramente la petición.",
-                "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False}
-            },
-            {
-                "type": "function", "name": "validate_python",
-                "description": "Comprueba la sintaxis de un archivo Python sin ejecutar sus acciones. Devuelve errores concretos para poder repararlos.",
-                "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False}
-            },
-            {
-                "type": "function", "name": "run_python",
-                "description": "Ejecuta un archivo Python para probar comportamiento. Úsalo después de validar sintaxis y evita programas potencialmente destructivos.",
-                "parameters": {"type": "object", "properties": {
-                    "path": {"type": "string"}, "timeout": {"type": "integer"}
-                }, "required": ["path"], "additionalProperties": False}
-            },
+            {"type": "function", "name": "list_files", "description": "Lista archivos y carpetas del workspace, ignorando carpetas pesadas.", "parameters": {"type": "object", "properties": {"directory": {"type": "string"}, "recursive": {"type": "boolean"}}, "required": [], "additionalProperties": False}},
+            {"type": "function", "name": "read_file", "description": "Lee un archivo de texto existente. Devuelve una parte acotada para no llenar el contexto.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False}},
+            {"type": "function", "name": "write_file", "description": "Crea o reemplaza un archivo completo dentro del workspace.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"], "additionalProperties": False}},
+            {"type": "function", "name": "replace_in_file", "description": "Hace un reemplazo puntual en un archivo existente.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}, "replace_all": {"type": "boolean"}}, "required": ["path", "old_text", "new_text"], "additionalProperties": False}},
+            {"type": "function", "name": "append_file", "description": "Agrega texto al final de un archivo.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"], "additionalProperties": False}},
+            {"type": "function", "name": "make_directory", "description": "Crea una carpeta dentro del workspace.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False}},
+            {"type": "function", "name": "delete_file", "description": "Elimina un archivo cuando sea necesario para la peticion.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False}},
+            {"type": "function", "name": "validate_python", "description": "Comprueba la sintaxis de un .py con py_compile.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False}},
+            {"type": "function", "name": "run_python", "description": "Ejecuta un .py no interactivo para comprobarlo. Timeout maximo 20 segundos.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "timeout": {"type": "integer"}}, "required": ["path"], "additionalProperties": False}},
+            {"type": "function", "name": "validate_project", "description": "Revisa un proyecto completo: Python, JSON y referencias locales HTML/CSS/JS. Devuelve errores concretos.", "parameters": {"type": "object", "properties": {"directory": {"type": "string"}}, "required": [], "additionalProperties": False}},
         ]
 
     def list_files(self, directory=".", recursive=False):
         folder = self._safe_path(directory)
         if not folder.is_dir():
             return {"ok": False, "error": f"No existe la carpeta: {directory}"}
-        entries = folder.rglob("*") if recursive else folder.iterdir()
-        result = []
-        for p in entries:
-            rel = str(p.relative_to(self.workspace))
-            result.append({"path": rel, "type": "dir" if p.is_dir() else "file"})
-        return {"ok": True, "files": sorted(result, key=lambda x: x["path"])}
+        if recursive:
+            entries = (p for p in folder.rglob("*") if not any(part in self.IGNORED_DIRS for part in p.parts))
+        else:
+            entries = (p for p in folder.iterdir() if p.name not in self.IGNORED_DIRS)
+        result = [{"path": str(p.relative_to(self.workspace)), "type": "dir" if p.is_dir() else "file"} for p in entries]
+        return {"ok": True, "files": sorted(result, key=lambda x: x["path"])[:1000]}
 
     def read_file(self, path):
         target = self._safe_path(path)
@@ -135,17 +82,17 @@ Tu respuesta final debe ser breve y decir qué archivos se crearon/modificaron y
             text = target.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             return {"ok": False, "error": "El archivo no es UTF-8 de texto."}
-        # Evita llenar el contexto con archivos gigantes.
-        limit = 30000
-        if len(text) > limit:
-            return {"ok": True, "truncated": True, "content": text[:limit], "total_chars": len(text)}
+        if len(text) > self.TEXT_LIMIT:
+            return {"ok": True, "truncated": True, "content": text[:self.TEXT_LIMIT], "total_chars": len(text)}
         return {"ok": True, "content": text}
 
     def write_file(self, path, content):
         target = self._safe_path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
+        existed = target.exists()
         target.write_text(content, encoding="utf-8", newline="")
-        return {"ok": True, "path": str(target.relative_to(self.workspace)), "bytes": len(content.encode("utf-8"))}
+        action = "actualizado" if existed else "creado"
+        return {"ok": True, "path": str(target.relative_to(self.workspace)), "action": action, "bytes": len(content.encode("utf-8"))}
 
     def replace_in_file(self, path, old_text, new_text, replace_all=False):
         target = self._safe_path(path)
@@ -154,18 +101,17 @@ Tu respuesta final debe ser breve y decir qué archivos se crearon/modificaron y
         content = target.read_text(encoding="utf-8")
         count = content.count(old_text)
         if count == 0:
-            return {"ok": False, "error": "No se encontro old_text. Lee de nuevo el archivo antes de intentar otro reemplazo."}
+            return {"ok": False, "error": "No se encontro old_text. Lee de nuevo el archivo."}
         if not replace_all and count > 1:
-            return {"ok": False, "error": f"old_text aparece {count} veces. Usa un fragmento mas especifico o replace_all=true."}
-        updated = content.replace(old_text, new_text, -1 if replace_all else 1)
-        target.write_text(updated, encoding="utf-8", newline="")
+            return {"ok": False, "error": f"old_text aparece {count} veces. Usa un fragmento mas especifico."}
+        target.write_text(content.replace(old_text, new_text, -1 if replace_all else 1), encoding="utf-8", newline="")
         return {"ok": True, "path": str(target.relative_to(self.workspace)), "replaced": count if replace_all else 1}
 
     def append_file(self, path, content):
         target = self._safe_path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        with target.open("a", encoding="utf-8", newline="") as f:
-            f.write(content)
+        with target.open("a", encoding="utf-8", newline="") as file:
+            file.write(content)
         return {"ok": True, "path": str(target.relative_to(self.workspace))}
 
     def make_directory(self, path):
@@ -182,47 +128,72 @@ Tu respuesta final debe ser breve y decir qué archivos se crearon/modificaron y
 
     def validate_python(self, path):
         target = self._safe_path(path)
-        if target.suffix.lower() != ".py":
-            return {"ok": False, "error": "validate_python solo acepta .py"}
-        if not target.is_file():
-            return {"ok": False, "error": f"No existe el archivo: {path}"}
+        if target.suffix.lower() != ".py" or not target.is_file():
+            return {"ok": False, "error": f"No existe un archivo Python valido: {path}"}
         try:
-            subprocess.run(
-                [sys.executable, "-m", "py_compile", str(target)],
-                cwd=str(self.workspace), capture_output=True, text=True, timeout=10, check=True
-            )
+            subprocess.run([sys.executable, "-m", "py_compile", str(target)], cwd=self.workspace, capture_output=True, text=True, timeout=8, check=True)
             return {"ok": True, "valid": True, "path": str(target.relative_to(self.workspace))}
         except subprocess.CalledProcessError as exc:
-            return {"ok": True, "valid": False, "stdout": exc.stdout[-6000:], "stderr": exc.stderr[-6000:]}
+            return {"ok": True, "valid": False, "stderr": exc.stderr[-5000:]}
         except subprocess.TimeoutExpired:
-            return {"ok": False, "error": "La validacion supero 10 segundos."}
+            return {"ok": False, "error": "La validacion de Python supero 8 segundos."}
 
-    def run_python(self, path, timeout=15):
+    def run_python(self, path, timeout=10):
         target = self._safe_path(path)
-        if target.suffix.lower() != ".py":
-            return {"ok": False, "error": "run_python solo acepta .py"}
-        if not target.is_file():
-            return {"ok": False, "error": f"No existe el archivo: {path}"}
-        timeout = max(1, min(int(timeout), 30))
+        if target.suffix.lower() != ".py" or not target.is_file():
+            return {"ok": False, "error": f"No existe un archivo Python valido: {path}"}
+        timeout = max(1, min(int(timeout), 20))
         try:
-            completed = subprocess.run(
-                [sys.executable, str(target)], cwd=str(self.workspace),
-                capture_output=True, text=True, timeout=timeout
-            )
-            return {"ok": True, "returncode": completed.returncode,
-                    "stdout": completed.stdout[-12000:], "stderr": completed.stderr[-12000:]}
+            completed = subprocess.run([sys.executable, str(target)], cwd=self.workspace, capture_output=True, text=True, timeout=timeout)
+            return {"ok": True, "returncode": completed.returncode, "stdout": completed.stdout[-6000:], "stderr": completed.stderr[-6000:]}
         except subprocess.TimeoutExpired as exc:
-            return {"ok": False, "error": f"La ejecucion supero {timeout}s",
-                    "stdout": (exc.stdout or "")[-4000:], "stderr": (exc.stderr or "")[-4000:]}
+            return {"ok": False, "error": f"La ejecucion supero {timeout}s", "stdout": str(exc.stdout or "")[-2000:], "stderr": str(exc.stderr or "")[-2000:]}
+
+    def validate_project(self, directory="."):
+        root = self._safe_path(directory)
+        if not root.is_dir():
+            return {"ok": False, "error": f"No existe la carpeta: {directory}"}
+        files = [p for p in root.rglob("*") if p.is_file() and not any(part in self.IGNORED_DIRS for part in p.parts)]
+        errors = []
+        checks = 0
+        for path in files:
+            rel = str(path.relative_to(self.workspace))
+            suffix = path.suffix.lower()
+            if suffix == ".py":
+                checks += 1
+                result = self.validate_python(rel)
+                if not result.get("valid", False):
+                    errors.append(f"{rel}: {result.get('stderr') or result.get('error')}")
+            elif suffix == ".json":
+                checks += 1
+                try:
+                    json.loads(path.read_text(encoding="utf-8"))
+                except Exception as exc:
+                    errors.append(f"{rel}: JSON invalido: {exc}")
+
+        existing = {str(p.relative_to(root)).replace("\\", "/") for p in files}
+        for path in files:
+            if path.suffix.lower() not in {".html", ".htm"}:
+                continue
+            checks += 1
+            text = path.read_text(encoding="utf-8", errors="replace")
+            refs = re.findall(r'(?:src|href)=["\']([^"\'#?]+)', text, flags=re.I)
+            for ref in refs:
+                if ref.startswith(("http://", "https://", "data:", "mailto:", "javascript:")):
+                    continue
+                candidate = (path.parent / ref).resolve()
+                try:
+                    candidate.relative_to(root.resolve())
+                except ValueError:
+                    errors.append(f"{path.relative_to(self.workspace)}: referencia fuera del proyecto: {ref}")
+                    continue
+                if not candidate.exists():
+                    errors.append(f"{path.relative_to(self.workspace)}: falta el recurso referenciado: {ref}")
+
+        return {"ok": True, "valid": not errors, "checks": checks, "errors": errors[:50], "files": len(files)}
 
     def execute_tool(self, name, args):
-        functions = {
-            "list_files": self.list_files, "read_file": self.read_file,
-            "write_file": self.write_file, "replace_in_file": self.replace_in_file,
-            "append_file": self.append_file, "make_directory": self.make_directory,
-            "delete_file": self.delete_file, "validate_python": self.validate_python,
-            "run_python": self.run_python,
-        }
+        functions = {"list_files": self.list_files, "read_file": self.read_file, "write_file": self.write_file, "replace_in_file": self.replace_in_file, "append_file": self.append_file, "make_directory": self.make_directory, "delete_file": self.delete_file, "validate_python": self.validate_python, "run_python": self.run_python, "validate_project": self.validate_project}
         fn = functions.get(name)
         if not fn:
             return {"ok": False, "error": f"Herramienta no encontrada: {name}"}
@@ -235,8 +206,6 @@ Tu respuesta final debe ser breve y decir qué archivos se crearon/modificaron y
     def _dump_item(item):
         if hasattr(item, "model_dump"):
             return item.model_dump(exclude_none=True)
-        if isinstance(item, dict):
-            return item
         return item
 
     def process_response(self, response):
@@ -264,6 +233,20 @@ Tu respuesta final debe ser breve y decir qué archivos se crearon/modificaron y
                 result = self.execute_tool(name, args)
             except Exception as exc:
                 result = {"ok": False, "error": f"Error procesando argumentos: {type(exc).__name__}: {exc}"}
+
+            if result.get("ok"):
+                if name == "write_file":
+                    print(f"[ARCHIVO] {result['action']}: {result['path']}")
+                elif name == "make_directory":
+                    print(f"[CARPETA] creada: {result['path']}")
+                elif name == "delete_file":
+                    print(f"[ARCHIVO] eliminado: {result['deleted']}")
+                elif name in {"validate_python", "validate_project"}:
+                    state = "OK" if result.get("valid", True) else "ERROR"
+                    print(f"[PRUEBA] {name}: {state}")
+            else:
+                print(f"[HERRAMIENTA] error en {name}: {result.get('error', 'desconocido')}")
+
             self.messages.append({
                 "type": "function_call_output",
                 "call_id": getattr(call, "call_id", getattr(call, "id", "")),
