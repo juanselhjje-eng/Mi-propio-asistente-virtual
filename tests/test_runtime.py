@@ -11,6 +11,9 @@ class RuntimeRoutingTests(unittest.TestCase):
     def test_general_question_is_general(self):
         self.assertFalse(looks_like_programming("qué es la fotosíntesis", []))
 
+    def test_python_question_stays_general(self):
+        self.assertFalse(looks_like_programming("qué es Python", []))
+
     def test_python_assistant_is_development(self):
         request = "créame un asistente IA con Python"
         self.assertTrue(looks_like_programming(request, []))
