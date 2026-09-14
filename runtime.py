@@ -7,28 +7,26 @@ from openai import OpenAI
 from agent import Agent
 from subagents import build_team_prompt, detect_specialists
 
-PROGRAMMING_MARKERS = (
+TECHNICAL_MARKERS = (
     "programa", "programar", "programación", "programacion", "código", "codigo", "archivo", "archivos",
     "proyecto", "app", "aplicación", "aplicacion", "software", "script", "bug", "error", "corrige",
-    "corregir", "arregla", "arreglar", "repara", "reparar", "crea", "crear", "construye", "construir",
-    "desarrolla", "desarrollar", "implementa", "implementar", "añade", "agrega", "modifica", "cambia",
-    "python", "pygame", "javascript", "typescript", "html", "css", "react", "node", "java", "c++", "c#",
-    "rust", "go", "php", "sql", "api", "web", "frontend", "backend", "servidor", "terminal", "npm", "pip",
-    "github", "juego", "videojuego", "interfaz", "ui", "base de datos", "database", "json", "bot",
+    "corregir", "arregla", "arreglar", "repara", "reparar", "implementa", "implementar", "modifica",
+    "modificar", "python", "pygame", "javascript", "typescript", "html", "css", "react", "node", "java",
+    "c++", "c#", "rust", "go", "php", "sql", "api", "web", "frontend", "backend", "servidor", "terminal",
+    "npm", "pip", "github", "juego", "videojuego", "interfaz", "ui", "base de datos", "database", "json", "bot",
     "asistente ia", "asistente de ia", "inteligencia artificial", "automatización", "automatizacion",
-)
-
-GENERAL_ONLY = (
-    "hola", "buenas", "buenos días", "buenos dias", "buenas tardes", "buenas noches", "gracias",
-    "qué tal", "que tal", "quién eres", "quien eres", "cómo estás", "como estas", "qué puedes hacer",
-    "que puedes hacer",
 )
 
 BUILD_MARKERS = (
     "crea un", "creame un", "créame un", "haz un", "hazme un", "construye un", "desarrolla un", "programa un",
-    "implementa un", "crear un", "hacer un", "desarrollar un", "construir un", "crea la", "creame la",
-    "créame la", "haz la", "hazme la", "construye la", "desarrolla la", "programa la", "crea los archivos",
-    "creame los archivos", "créame los archivos",
+    "implementa un", "crear un", "hacer un", "desarrollar un", "construir un", "crea la", "creame la", "créame la",
+    "haz la", "hazme la", "construye la", "desarrolla la", "programa la", "crea los archivos", "creame los archivos",
+    "créame los archivos", "crea una aplicación", "crea una app", "crea un juego", "crea un programa", "crea un asistente",
+)
+
+GENERAL_ONLY = (
+    "hola", "buenas", "buenos días", "buenos dias", "buenas tardes", "buenas noches", "gracias", "qué tal", "que tal",
+    "quién eres", "quien eres", "cómo estás", "como estas", "qué puedes hacer", "que puedes hacer",
 )
 
 IMPLEMENTATION_TOOLS = {"write_file", "replace_in_file", "append_file", "make_directory", "delete_file"}
@@ -40,10 +38,10 @@ def looks_like_programming(text: str, history: list[dict]) -> bool:
         return False
     if any(marker in value for marker in GENERAL_ONLY) and len(value.split()) <= 8:
         return False
-    if any(marker in value for marker in PROGRAMMING_MARKERS):
+    if any(marker in value for marker in BUILD_MARKERS) or any(marker in value for marker in TECHNICAL_MARKERS):
         return True
     recent = " ".join(str(item.get("content", "")) for item in history[-4:] if item.get("role") == "user").lower()
-    return any(marker in recent for marker in PROGRAMMING_MARKERS)
+    return any(marker in recent for marker in TECHNICAL_MARKERS)
 
 
 def requests_implementation(text: str) -> bool:
@@ -159,7 +157,6 @@ def run_request(*, history, request, settings, workspace, model, base_url, api_k
         signature = tuple((getattr(call, "name", ""), getattr(call, "arguments", "")) for call in calls)
         repeated_signature_count = repeated_signature_count + 1 if signature == previous_signature else 0
         previous_signature = signature
-
         agent.add_tool_outputs(calls)
 
         if implementation_required and "create_project" in names and not had_implementation:
