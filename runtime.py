@@ -24,6 +24,11 @@ BUILD_MARKERS = (
     "créame los archivos", "crea una aplicación", "crea una app", "crea un juego", "crea un programa", "crea un asistente",
 )
 
+QUESTION_MARKERS = (
+    "qué es", "que es", "cómo funciona", "como funciona", "para qué sirve", "para que sirve", "puedes explicar",
+    "explícame", "explicame", "qué significa", "que significa", "cuál es", "cual es", "por qué", "porque",
+)
+
 GENERAL_ONLY = (
     "hola", "buenas", "buenos días", "buenos dias", "buenas tardes", "buenas noches", "gracias", "qué tal", "que tal",
     "quién eres", "quien eres", "cómo estás", "como estas", "qué puedes hacer", "que puedes hacer",
@@ -38,7 +43,11 @@ def looks_like_programming(text: str, history: list[dict]) -> bool:
         return False
     if any(marker in value for marker in GENERAL_ONLY) and len(value.split()) <= 8:
         return False
-    if any(marker in value for marker in BUILD_MARKERS) or any(marker in value for marker in TECHNICAL_MARKERS):
+    if any(marker in value for marker in BUILD_MARKERS):
+        return True
+    if any(marker in value for marker in QUESTION_MARKERS) and not any(marker in value for marker in ("error", "bug", "corrige", "arregla", "modifica", "implementa")):
+        return False
+    if any(marker in value for marker in TECHNICAL_MARKERS):
         return True
     recent = " ".join(str(item.get("content", "")) for item in history[-4:] if item.get("role") == "user").lower()
     return any(marker in recent for marker in TECHNICAL_MARKERS)
@@ -133,7 +142,7 @@ def run_request(*, history, request, settings, workspace, model, base_url, api_k
     team = detect_specialists(files, request)
     implementation_required = requests_implementation(request)
     instructions = developer_instructions(settings, implementation_required) + "\n\n" + build_team_prompt(team)
-    progress(f"Modo desarrollo · {', '.join(item.name for item in team)}")
+    progress(f"Modo desarrollo · {', '.join(item.name for item in team) if team else 'agente principal'}")
 
     max_rounds = 40
     previous_signature = None
@@ -149,7 +158,7 @@ def run_request(*, history, request, settings, workspace, model, base_url, api_k
             if implementation_required and not had_implementation:
                 agent.messages.append({"role": "user", "content": "La implementación todavía no está hecha. No cierres la tarea. Revisa el proyecto y usa las herramientas para crear los archivos y el código solicitado. Continúa hasta tener una implementación real y validada."})
                 continue
-            return text or getattr(response, "output_text", "") or "No hubo una respuesta útil del modelo.", ", ".join(item.name for item in team)
+            return text or getattr(response, "output_text", "") or "No hubo una respuesta útil del modelo.", ", ".join(item.name for item in team) or "Desarrollo"
 
         names = [getattr(call, "name", "") for call in calls]
         if any(name in IMPLEMENTATION_TOOLS for name in names):
@@ -166,4 +175,4 @@ def run_request(*, history, request, settings, workspace, model, base_url, api_k
             agent.messages.append({"role": "user", "content": "Estás repitiendo la misma acción sin avanzar. Inspecciona el estado real de los archivos, cambia de estrategia y completa la implementación pendiente."})
             repeated_signature_count = 0
 
-    return "La tarea necesita más trabajo después de 40 iteraciones. Milo detuvo el ciclo para no bloquear la aplicación; puedes continuar con otra petición.", ", ".join(item.name for item in team)
+    return "La tarea necesita más trabajo después de 40 iteraciones. Milo detuvo el ciclo para no bloquear la aplicación; puedes continuar con otra petición.", ", ".join(item.name for item in team) or "Desarrollo"
