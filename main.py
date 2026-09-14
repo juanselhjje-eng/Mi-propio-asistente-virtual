@@ -1,7 +1,7 @@
 import os
 from dotenv import load_dotenv
 from openai import OpenAI
-from agent import Agent
+from neural_agent import NeuralAgent
 
 load_dotenv()
 
@@ -10,18 +10,18 @@ BASE_URL = os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434/v1"
 API_KEY = os.getenv("OLLAMA_API_KEY", "ollama")
 
 client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
-agent = Agent()
+agent = NeuralAgent()
 
-print("Asistente Juan - constructor de proyectos")
+print("Asistente Juan - constructor de proyectos + laboratorio neuronal")
 print(f"Modelo: {MODEL}")
 print(f"Workspace: {agent.workspace}")
+print("Puede crear proyectos, entrenar redes neuronales y probar resultados.")
 print("Escribe 'salir' para cerrar.\n")
 
 
 def ask_agent():
-    """Mantiene el bucle Responses API -> herramientas -> validacion."""
     rounds = 0
-    max_rounds = 30
+    max_rounds = 40
 
     while rounds < max_rounds:
         rounds += 1
@@ -33,10 +33,11 @@ def ask_agent():
                 "Construye y corrige el proyecto directamente en el workspace. "
                 "No pegues grandes bloques de codigo en la respuesta si puedes escribirlos con herramientas. "
                 "Para codigo nuevo, crea primero una estructura coherente y luego implementa. "
-                "Para Python, usa validate_python despues de escribir o modificar. "
-                "Si una validacion o ejecucion falla, corrige el problema y vuelve a comprobar. "
-                "No afirmes que funciona sin una comprobacion razonable. "
-                "Cuando termines, responde solo con un resumen corto de archivos y pruebas."
+                "Para Python, valida y ejecuta pruebas razonables. "
+                "Para redes neuronales, prepara datos, entrena con train_neural_network, inspecciona la perdida y prueba predicciones. "
+                "Si una validacion, ejecucion o entrenamiento falla, usa el error como evidencia, corrige y vuelve a comprobar. "
+                "No afirmes que algo funciona sin una comprobacion razonable. "
+                "Cuando termines, responde solo con un resumen corto de archivos, pruebas y resultados de entrenamiento."
             ),
         )
 
