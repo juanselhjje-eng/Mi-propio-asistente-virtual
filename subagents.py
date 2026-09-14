@@ -12,7 +12,6 @@ class SubAgent:
 
 
 SUBAGENTS = {
-    "planner": SubAgent("planner", "Arquitectura", (), "Define objetivo, estructura, archivos, dependencias y pruebas necesarias para la petición actual."),
     "python": SubAgent("python", "Python", ("py",), "Escribe Python ejecutable, imports coherentes y manejo de errores."),
     "pygame": SubAgent("pygame", "Pygame", ("py",), "Construye únicamente cuando el usuario pide Pygame; separa lógica, recursos e interfaz."),
     "javascript": SubAgent("javascript", "JavaScript", ("js", "mjs", "cjs"), "Mantiene módulos, DOM, eventos y asincronía coherentes."),
@@ -41,25 +40,19 @@ REQUEST_KEYWORDS = {
 
 
 def detect_specialists(files=None, request=""):
-    """Activa solo especialistas relacionados con la petición actual.
-
-    Los archivos del workspace no se usan para activar lenguajes ajenos al
-    encargo actual; así un repositorio grande no convierte cada tarea en un
-    equipo de diez especialistas.
-    """
+    """Activa solo especialistas relacionados con la petición actual."""
     text = f" {request.lower()} "
-    selected = [SUBAGENTS["planner"]]
+    selected = []
 
     for name, keywords in REQUEST_KEYWORDS.items():
         if any(keyword.lower() in text for keyword in keywords):
             selected.append(SUBAGENTS[name])
 
-    # HTML/CSS/JS solo se combinan cuando el usuario realmente pidió una web.
     if any(word in text for word in ("web", "pagina", "página", "html")):
         for name in ("html", "css"):
             if SUBAGENTS[name] not in selected:
                 selected.append(SUBAGENTS[name])
-        if "javascript" in text or "node" in text or "js" in text:
+        if "javascript" in text or "node" in text or " js " in text:
             selected.append(SUBAGENTS["javascript"])
 
     build_request = any(word in text for word in ("crea", "crear", "creame", "créame", "haz", "hazme", "construye", "desarrolla", "programa", "corrige", "arregla", "modifica", "implementa", "repara"))
@@ -76,6 +69,8 @@ def detect_specialists(files=None, request=""):
 
 
 def build_team_prompt(agents):
+    if not agents:
+        return "ESPECIALISTAS: ninguno adicional. Resuelve la petición directamente con el agente principal."
     lines = ["ESPECIALISTAS ACTIVOS PARA ESTA PETICIÓN:"]
     for agent in agents:
         langs = ", ".join(agent.languages) or "general"
