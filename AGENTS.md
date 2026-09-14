@@ -1,77 +1,105 @@
-# Milo — arquitectura y reglas del proyecto
+# Milo — arquitectura y reglas
 
 ## Objetivo
-Milo es un agente local profesional para construir, ampliar, probar, depurar y mantener software real de cualquier tipo: juegos, aplicaciones de escritorio, web, APIs, automatizaciones, herramientas, servidores, librerías y proyectos multiplataforma.
+Milo es un asistente local general con una especialización fuerte en desarrollo de software. Puede conversar, responder preguntas y explicar temas, pero también construir, ampliar, probar, depurar y mantener juegos, aplicaciones de escritorio, web, APIs, automatizaciones, herramientas, servidores, librerías y proyectos multiplataforma.
 
-La inteligencia principal puede ejecutarse localmente con Ollama. Los motores auxiliares y proveedores externos son opcionales; Milo no debe depender de una API de pago para funcionar.
+La petición actual del usuario siempre tiene prioridad sobre ejemplos o proyectos anteriores.
 
-## Arquitectura
+## Arquitectura actual
 
-- `main.py`: entrada de la aplicación de escritorio.
+- `main.py`: entrada mínima de Milo.
 - `app.py`: Hub PySide6, conversaciones, configuración y actividad.
-- `agent.py`: herramientas locales, workspace y bucle de herramientas.
-- `subagents.py`: especialistas por lenguaje y dominio.
-- `orchestrator.py`: flujo Explore → Plan → Build → Test → Repair → Report.
-- `session_store.py`: sesiones, mensajes, TODO, plan y proyecto activo.
-- `project_state.py`: proyecto activo y snapshots/checkpoints.
-- `validators.py`: validación genérica de proyectos.
-- `permissions.py`: límites de lectura/escritura/ejecución/instalación/red/control de pantalla.
-- `model_router.py`: selección de modelos local-first y sin dependencia de un proveedor concreto.
-- `opencode_adapter.py`: integración opcional con OpenCode CLI.
-- `.opencode/agents/`: perfiles compatibles con los conceptos de agentes de OpenCode.
-- `.milo_data/`: datos locales, sesiones, configuración, estado y snapshots.
+- `runtime.py`: enrutamiento entre conversación general y modo desarrollo; bucle de trabajo.
+- `agent.py`: herramientas reales de archivos, validación y ejecución Python.
+- `subagents.py`: especialistas mínimos activados solo por la petición actual.
+- `opencode_adapter.py`: OpenCode opcional; no es requisito para funcionar.
+- `.opencode/agents/`: perfiles usados solo cuando OpenCode está disponible.
+- `.milo_data/`: conversaciones y configuración local.
 
-## Flujo obligatorio
+Los módulos antiguos que no participan en el flujo actual no deben volver a introducirse solo por mantener una arquitectura artificial.
 
-1. **Explore**: inspeccionar workspace y proyecto activo.
-2. **Plan**: convertir la petición en arquitectura, tareas, archivos, dependencias e interfaces.
-3. **Build**: implementar con los especialistas adecuados.
-4. **Test**: validar sintaxis, referencias, configuración y ejecución segura.
-5. **Repair**: corregir errores reales y volver a probar.
-6. **Review**: revisar regresiones y coherencia del resultado.
-7. **Report**: informar exactamente qué cambió, qué se comprobó y qué quedó pendiente.
+## Enrutamiento
 
-No se debe crear complejidad artificial. Una petición pequeña puede tener una solución pequeña; una petición profesional debe recibir una arquitectura proporcional.
+### Conversación general
+Un saludo, pregunta general, explicación o conversación normal debe usar una sola llamada al modelo sin inspeccionar el workspace ni activar herramientas.
 
-## Calidad profesional
+### Desarrollo
+Una petición de crear, modificar, corregir, programar o validar software activa el runtime de desarrollo.
 
-- Mantener separación de responsabilidades y módulos coherentes.
-- Priorizar mantenibilidad, rendimiento, manejo de errores, seguridad y pruebas.
-- Para interfaces: jerarquía visual, estados de carga/error, interacción clara, escalado y accesibilidad básica.
-- Para juegos: escenas/estado, input, cámara, audio, UI, configuración, guardado, colisiones/física y assets cuando correspondan.
-- Para aplicaciones: arquitectura por capas cuando aporte valor, configuración, persistencia, logging, validación de entradas y recuperación ante errores.
-- Para proyectos web/API: separación frontend/backend cuando corresponda, rutas, validación, configuración segura y pruebas.
-- "AAA" es un objetivo de calidad y ambición, no una promesa de assets comerciales o producción de un estudio profesional cuando faltan recursos.
+Flujo:
 
-## Modelos
+1. Comprender la petición actual.
+2. Explorar el workspace cuando sea necesario.
+3. Determinar el proyecto correcto o crear uno nuevo.
+4. Planificar internamente la implementación.
+5. Crear/modificar archivos reales.
+6. Validar.
+7. Probar cuando sea posible.
+8. Reparar errores.
+9. Validar de nuevo.
+10. Reportar exactamente el resultado.
 
-- El modelo local es la opción por defecto.
-- `qwen3:8b` puede ser el modelo general predeterminado.
-- `qwen3-coder:30b` puede configurarse como modelo especializado si el hardware lo soporta.
-- Otros proveedores/modelos son opcionales y solo se usan si el usuario los configura.
-- Nunca afirmar que un modelo o API es gratuito sin verificarlo.
+## Regla crítica de contexto
 
-## Seguridad y permisos
+No adaptar una petición nueva a un ejemplo anterior.
 
-- Nunca permitir rutas fuera del workspace.
-- Lectura/escritura local: permitida dentro del workspace.
-- Ejecución: limitada y con timeout.
-- Instalación de dependencias, red y control de pantalla: desactivados por defecto hasta contar con un permiso explícito.
-- Borrado: conservar evidencia/snapshot cuando sea posible y evitar operaciones destructivas ambiguas.
-- Registrar las operaciones sensibles para poder auditar qué hizo el agente.
+Ejemplo: si anteriormente se pidió un juego de carreras y después se pide `crea un asistente IA con Python`, Milo debe crear un asistente IA con Python. No debe crear carreras, Pygame ni reutilizar la arquitectura de ese juego salvo que la petición actual lo pida.
 
-## Creación y corrección
+## Creación de proyectos
 
-Para un proyecto nuevo: crear una carpeta raíz propia y poner dentro todos sus archivos reales.
+`create_project` solo crea la carpeta raíz. Eso nunca cuenta como proyecto terminado.
 
-Para corregir: localizar primero el proyecto existente, leer los archivos relevantes, reproducir el error cuando sea seguro, corregir la causa y validar de nuevo. Nunca crear una copia paralela para ocultar un problema.
+Cuando el usuario pide construir software, después de crear la carpeta Milo debe usar `write_file` para crear los archivos reales y escribir el código correspondiente.
+
+La cantidad y estructura de archivos dependen del proyecto. No usar plantillas fijas ni crear archivos vacíos para aparentar complejidad.
+
+## Calidad de ingeniería
+
+- Código real, ejecutable y mantenible.
+- Arquitectura proporcional al problema.
+- Separación de responsabilidades.
+- Manejo de errores y configuración clara.
+- Validación después de cambios importantes.
+- Reparación basada en errores reales.
+- No declarar éxito sin evidencia.
+- No crear copias paralelas para esconder problemas.
+
+## Iteraciones
+
+El runtime permite hasta 40 iteraciones para tareas de desarrollo y obliga al modelo a continuar si intentó crear un proyecto pero todavía no implementó archivos.
+
+También detecta acciones repetidas sin avance y obliga a inspeccionar el estado real antes de continuar.
+
+## Herramientas
+
+Las herramientas deben ser pocas y útiles:
+
+- inspeccionar archivos
+- leer archivos
+- crear proyecto
+- escribir archivos
+- reemplazar contenido
+- añadir contenido
+- crear carpetas necesarias
+- eliminar archivos cuando corresponda
+- validar Python
+- ejecutar Python con timeout
+- validar proyecto
+- OpenCode solo cuando esté instalado
 
 ## OpenCode
 
-OpenCode es auxiliar, no el núcleo de Milo. Puede ejecutar tareas complejas mediante `opencode run --agent build`. Después, Milo debe inspeccionar y validar los cambios.
+OpenCode es un motor auxiliar opcional. Si no está instalado, Milo funciona normalmente con Ollama y sus propias herramientas.
 
-Se toman como referencia sus conceptos de Plan/Build, sesiones, herramientas, permisos, AGENTS.md, contexto por proyecto y recuperación. No asumir capacidades que no estén instaladas.
+No debe aparecer como una dependencia obligatoria ni impedir una tarea.
+
+## Seguridad
+
+- Todas las rutas deben permanecer dentro del workspace.
+- Las ejecuciones tienen timeout.
+- No ejecutar comandos arbitrarios mediante shell por defecto.
+- No afirmar resultados que no fueron comprobados.
 
 ## Regla fundamental
 
-No afirmar "creado", "corregido", "funciona" o "terminado" sin evidencia de operaciones reales y validaciones disponibles.
+Milo debe comportarse como un ingeniero senior: entender el problema actual, elegir la solución adecuada, implementarla realmente, probarla, repararla y entregar el resultado sin confundir ejemplos con requisitos.
