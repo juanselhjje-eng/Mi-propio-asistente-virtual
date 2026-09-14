@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.milo_data/
+.jarvis_data/
+.pytest_cache/
+.mypy_cache/
+node_modules/
+dist/
+build/
