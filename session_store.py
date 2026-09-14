@@ -1,4 +1,4 @@
-"""Persistencia ligera de sesiones y mensajes de JARVIS."""
+"""Persistencia ligera de sesiones y mensajes de Milo."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 class SessionStore:
-    def __init__(self, root: str | Path = ".jarvis_data"):
+    def __init__(self, root: str | Path = ".milo_data"):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.path = self.root / "sessions.json"
@@ -31,17 +31,9 @@ class SessionStore:
         tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(self.path)
 
-    def create(self, title: str = "Nueva conversación") -> dict:
+    def create(self, title: str = "Nueva conversación", workspace: str | None = None) -> dict:
         session_id = uuid.uuid4().hex[:12]
-        session = {
-            "id": session_id,
-            "title": title,
-            "created": self._now(),
-            "updated": self._now(),
-            "messages": [],
-            "todo": [],
-            "workspace": None,
-        }
+        session = {"id": session_id, "title": title, "created": self._now(), "updated": self._now(), "messages": [], "todo": [], "workspace": workspace, "active_project": None, "plan": None}
         self.data[session_id] = session
         self._save()
         return session
@@ -69,6 +61,20 @@ class SessionStore:
     def set_todo(self, session_id: str, todo: list[dict]) -> dict:
         session = self.data[session_id]
         session["todo"] = todo
+        session["updated"] = self._now()
+        self._save()
+        return session
+
+    def set_plan(self, session_id: str, plan: dict | None) -> dict:
+        session = self.data[session_id]
+        session["plan"] = plan
+        session["updated"] = self._now()
+        self._save()
+        return session
+
+    def set_active_project(self, session_id: str, project: str | None) -> dict:
+        session = self.data[session_id]
+        session["active_project"] = project
         session["updated"] = self._now()
         self._save()
         return session
