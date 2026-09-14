@@ -12,9 +12,10 @@ class Agent:
     IGNORED_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", ".mypy_cache", ".pytest_cache"}
     TEXT_LIMIT = 16000
 
-    def __init__(self, workspace=None):
+    def __init__(self, workspace=None, on_tool_result=None):
         self.workspace = Path(workspace or os.getenv("ASSISTANT_WORKSPACE") or os.getcwd()).resolve()
         self.workspace.mkdir(parents=True, exist_ok=True)
+        self.on_tool_result = on_tool_result
         self.setup_tools()
         self.messages = [{"role": "system", "content": self._system_prompt()}]
 
@@ -53,9 +54,9 @@ El modelo de lenguaje es la inteligencia principal. No necesitas una red neurona
         self.tools = [
             {"type": "function", "name": "list_files", "description": "Lista archivos y carpetas del workspace, ignorando carpetas pesadas.", "parameters": {"type": "object", "properties": {"directory": {"type": "string"}, "recursive": {"type": "boolean"}}, "required": [], "additionalProperties": False}},
             {"type": "function", "name": "read_file", "description": "Lee un archivo de texto existente. Devuelve una parte acotada para no llenar el contexto.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False}},
-            {"type": "function", "name": "write_file", "description": "Crea o reemplaza un archivo completo dentro del workspace.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"], "additionalProperties": False}},
-            {"type": "function", "name": "replace_in_file", "description": "Hace un reemplazo puntual en un archivo existente.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}, "replace_all": {"type": "boolean"}}, "required": ["path", "old_text", "new_text"], "additionalProperties": False}},
-            {"type": "function", "name": "append_file", "description": "Agrega texto al final de un archivo.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"], "additionalProperties": False}},
+            {"type": "function", "name": "write_file", "description": "Crea o reemplaza un archivo completo dentro del workspace y comprueba que quedo escrito.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"], "additionalProperties": False}},
+            {"type": "function", "name": "replace_in_file", "description": "Hace un reemplazo puntual en un archivo existente y comprueba el cambio.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}, "replace_all": {"type": "boolean"}}, "required": ["path", "old_text", "new_text"], "additionalProperties": False}},
+            {"type": "function", "name": "append_file", "description": "Agrega texto al final de un archivo y comprueba el cambio.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"], "additionalProperties": False}},
             {"type": "function", "name": "make_directory", "description": "Crea una carpeta dentro del workspace.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False}},
             {"type": "function", "name": "delete_file", "description": "Elimina un archivo cuando sea necesario para la peticion.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False}},
             {"type": "function", "name": "validate_python", "description": "Comprueba la sintaxis de un .py con py_compile.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False}},
@@ -91,8 +92,11 @@ El modelo de lenguaje es la inteligencia principal. No necesitas una red neurona
         target.parent.mkdir(parents=True, exist_ok=True)
         existed = target.exists()
         target.write_text(content, encoding="utf-8", newline="")
+        verified = target.is_file() and target.read_text(encoding="utf-8") == content
+        if not verified:
+            return {"ok": False, "error": f"No se pudo verificar la escritura de: {path}"}
         action = "actualizado" if existed else "creado"
-        return {"ok": True, "path": str(target.relative_to(self.workspace)), "action": action, "bytes": len(content.encode("utf-8"))}
+        return {"ok": True, "path": str(target.relative_to(self.workspace)), "action": action, "bytes": len(content.encode("utf-8")), "verified": True}
 
     def replace_in_file(self, path, old_text, new_text, replace_all=False):
         target = self._safe_path(path)
@@ -104,27 +108,32 @@ El modelo de lenguaje es la inteligencia principal. No necesitas una red neurona
             return {"ok": False, "error": "No se encontro old_text. Lee de nuevo el archivo."}
         if not replace_all and count > 1:
             return {"ok": False, "error": f"old_text aparece {count} veces. Usa un fragmento mas especifico."}
-        target.write_text(content.replace(old_text, new_text, -1 if replace_all else 1), encoding="utf-8", newline="")
-        return {"ok": True, "path": str(target.relative_to(self.workspace)), "replaced": count if replace_all else 1}
+        updated = content.replace(old_text, new_text, -1 if replace_all else 1)
+        target.write_text(updated, encoding="utf-8", newline="")
+        if target.read_text(encoding="utf-8") != updated:
+            return {"ok": False, "error": f"No se pudo verificar el cambio en: {path}"}
+        return {"ok": True, "path": str(target.relative_to(self.workspace)), "replaced": count if replace_all else 1, "verified": True}
 
     def append_file(self, path, content):
         target = self._safe_path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         with target.open("a", encoding="utf-8", newline="") as file:
             file.write(content)
-        return {"ok": True, "path": str(target.relative_to(self.workspace))}
+        if not target.is_file() or not target.read_text(encoding="utf-8").endswith(content):
+            return {"ok": False, "error": f"No se pudo verificar el cambio en: {path}"}
+        return {"ok": True, "path": str(target.relative_to(self.workspace)), "verified": True}
 
     def make_directory(self, path):
         target = self._safe_path(path)
         target.mkdir(parents=True, exist_ok=True)
-        return {"ok": True, "path": str(target.relative_to(self.workspace))}
+        return {"ok": True, "path": str(target.relative_to(self.workspace)), "verified": target.is_dir()}
 
     def delete_file(self, path):
         target = self._safe_path(path)
         if not target.is_file():
             return {"ok": False, "error": f"No existe el archivo: {path}"}
         target.unlink()
-        return {"ok": True, "deleted": str(target.relative_to(self.workspace))}
+        return {"ok": True, "deleted": str(target.relative_to(self.workspace)), "verified": not target.exists()}
 
     def validate_python(self, path):
         target = self._safe_path(path)
@@ -171,7 +180,6 @@ El modelo de lenguaje es la inteligencia principal. No necesitas una red neurona
                 except Exception as exc:
                     errors.append(f"{rel}: JSON invalido: {exc}")
 
-        existing = {str(p.relative_to(root)).replace("\\", "/") for p in files}
         for path in files:
             if path.suffix.lower() not in {".html", ".htm"}:
                 continue
@@ -236,16 +244,28 @@ El modelo de lenguaje es la inteligencia principal. No necesitas una red neurona
 
             if result.get("ok"):
                 if name == "write_file":
-                    print(f"[ARCHIVO] {result['action']}: {result['path']}")
+                    message = f"[ARCHIVO] {result['action']}: {result['path']} · verificado"
+                elif name == "replace_in_file":
+                    message = f"[ARCHIVO] modificado: {result['path']} · verificado"
+                elif name == "append_file":
+                    message = f"[ARCHIVO] actualizado: {result['path']} · verificado"
                 elif name == "make_directory":
-                    print(f"[CARPETA] creada: {result['path']}")
+                    message = f"[CARPETA] creada: {result['path']} · verificado"
                 elif name == "delete_file":
-                    print(f"[ARCHIVO] eliminado: {result['deleted']}")
+                    message = f"[ARCHIVO] eliminado: {result['deleted']} · verificado"
                 elif name in {"validate_python", "validate_project"}:
                     state = "OK" if result.get("valid", True) else "ERROR"
-                    print(f"[PRUEBA] {name}: {state}")
+                    message = f"[PRUEBA] {name}: {state}"
+                else:
+                    message = f"[HERRAMIENTA] {name}: OK"
             else:
-                print(f"[HERRAMIENTA] error en {name}: {result.get('error', 'desconocido')}")
+                message = f"[HERRAMIENTA] error en {name}: {result.get('error', 'desconocido')}"
+            print(message)
+            if self.on_tool_result:
+                try:
+                    self.on_tool_result(message, result)
+                except Exception:
+                    pass
 
             self.messages.append({
                 "type": "function_call_output",
