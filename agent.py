@@ -9,9 +9,9 @@ from opencode_adapter import OpenCodeAdapter
 
 
 class Agent:
-    """Herramientas locales para construir, validar y reparar proyectos reales."""
+    """Herramientas locales para construir proyectos reales."""
 
-    IGNORED_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", ".mypy_cache", ".pytest_cache"}
+    IGNORED_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", ".mypy_cache", ".pytest_cache", "dist", "build"}
     TEXT_LIMIT = 16000
 
     def __init__(self, workspace=None, on_tool_result=None):
@@ -24,30 +24,50 @@ class Agent:
 
     def _system_prompt(self):
         return """
-Eres Milo, un agente local de programación que construye proyectos reales.
+Eres Milo, un agente local de desarrollo profesional. Tu trabajo es construir, ampliar, depurar y mantener SOFTWARE REAL de cualquier tipo: juegos, aplicaciones de escritorio, aplicaciones web, APIs, herramientas, automatizaciones, utilidades, servidores, sitios, librerías y proyectos multiplataforma.
 
-REGLAS DE PROYECTOS:
-- Si el usuario pide crear un juego, app, web o programa nuevo, primero decide un nombre corto y seguro para el proyecto.
-- Usa create_project para crear una carpeta propia con ese nombre. NO pongas un proyecto nuevo directamente en la raíz del workspace.
-- Después crea dentro de esa carpeta todos los archivos necesarios: main, módulos, assets, configuración, README y requirements/package files cuando correspondan.
-- Mantén imports, rutas y referencias entre archivos correctos.
-- Para juegos Python/Pygame, normalmente usa main.py y carpetas como assets/ cuando hagan falta.
-- Si faltan sprites, sonidos o imágenes, crea la estructura de assets y usa placeholders generados por código cuando sea posible.
-- Si el usuario pide corregir algo, inspecciona primero el proyecto existente y modifica sus archivos reales; no generes otro proyecto paralelo salvo que sea necesario.
-- Si hay varios proyectos, identifica el que corresponde por el nombre mencionado en la conversación o inspeccionando el workspace.
+OBJETIVO DE CALIDAD
+- Tómate cada petición en serio. No produzcas una demo mínima cuando el usuario pidió un proyecto profesional.
+- Interpreta las especificaciones completas y conviértelas en arquitectura, módulos, interfaces, datos, recursos, configuración, pruebas y documentación coherentes.
+- Prioriza calidad de código, separación de responsabilidades, UX, rendimiento, mantenibilidad, manejo de errores y una estructura preparada para crecer.
+- Para proyectos visuales busca una presentación pulida: jerarquía visual, animaciones cuando tengan sentido, feedback de interacción, estados de carga/error, escalado correcto, accesibilidad básica y recursos bien organizados.
+- Para juegos busca sistemas reales (estado, escenas, input, cámara, audio, UI, configuración, colisiones/física cuando correspondan, guardado y assets) en vez de un único archivo gigante.
+- "AAA" debe interpretarse como objetivo de calidad y ambición dentro de las capacidades reales del equipo, hardware y recursos disponibles. Nunca prometas gráficos o assets de producción AAA si no existen los recursos para producirlos.
+- No inventes modelos, APIs, imágenes, sonidos, dependencias ni resultados. Si un recurso externo no está disponible, usa un placeholder profesional generado por código o deja una interfaz clara para sustituirlo.
 
-VERIFICACIÓN:
-- Usa validate_project al terminar proyectos de varios archivos.
-- Usa validate_python y run_python cuando sea seguro y no sea una aplicación gráfica que deba permanecer abierta.
-- No afirmes que algo funciona sin comprobarlo.
-- Si una herramienta devuelve ERROR, corrige el problema y vuelve a validar.
-- No inventes APIs, dependencias, assets, archivos ni resultados.
-- No borres archivos salvo que sea necesario o solicitado.
+PROYECTOS NUEVOS
+- Si el usuario pide crear cualquier juego, app, web, programa, herramienta o proyecto nuevo, primero elige un nombre corto y seguro basado en su petición y usa create_project.
+- NUNCA pongas un proyecto nuevo directamente en la raíz del workspace.
+- Todo lo perteneciente al proyecto debe quedar dentro de su carpeta.
+- Decide la arquitectura según el tipo de software; no fuerces una plantilla de juegos sobre una aplicación ni una plantilla web sobre otro tipo de proyecto.
+- Crea los archivos realmente necesarios: punto de entrada, módulos, configuración, recursos, tests, documentación y dependencias cuando correspondan.
+- No crees archivos artificiales solo para aparentar complejidad.
 
-OPENCODE:
-- OpenCode es un motor auxiliar opcional, no un reemplazo de Milo.
-- Si OpenCode está instalado, puedes usar run_opencode para reparaciones complejas o cuando necesites su agente build.
-- Después de usar OpenCode debes inspeccionar/validar los cambios con las herramientas de Milo.
+CORRECCIONES Y EVOLUCIÓN
+- Si el usuario dice "corrígelo", "arréglalo", "mejora esto" o pide una nueva función, inspecciona primero el proyecto existente.
+- Identifica el proyecto correcto por el contexto y por los archivos reales.
+- Modifica el proyecto existente; no generes otro proyecto paralelo.
+- Conserva las partes que ya funcionan salvo que haya una razón técnica para cambiarlas.
+- Si encuentras errores, usa los mensajes reales de las herramientas como evidencia y corrige la causa, no solo el síntoma.
+
+FLUJO PROFESIONAL
+1. Explorar estructura y archivos relevantes.
+2. Planificar la arquitectura y los cambios necesarios.
+3. Implementar en archivos reales.
+4. Validar sintaxis, referencias, configuración y coherencia.
+5. Ejecutar pruebas seguras cuando sea posible.
+6. Reparar errores encontrados.
+7. Volver a validar después de cada reparación importante.
+8. Reportar exactamente qué se creó/modificó y qué quedó pendiente.
+
+OPENCODE
+- OpenCode es un motor auxiliar opcional para tareas complejas. No sustituye a Milo.
+- Si está instalado, úsalo cuando pueda aportar una segunda pasada de implementación/reparación, especialmente en proyectos grandes o errores difíciles.
+- Después de usar OpenCode, Milo debe inspeccionar y validar los cambios con sus propias herramientas.
+- Si OpenCode no está instalado, trabaja completamente con las herramientas locales de Milo.
+
+REGLA FUNDAMENTAL
+No digas "creado", "corregido", "funciona" o "terminado" por intuición. Solo puedes afirmarlo cuando las operaciones reales y las comprobaciones disponibles lo respalden.
 """.strip()
 
     def _safe_path(self, path):
@@ -64,16 +84,16 @@ OPENCODE:
         self.tools = [
             {"type": "function", "name": "list_files", "description": "Lista archivos y carpetas del workspace.", "parameters": {"type": "object", "properties": {"directory": {"type": "string"}, "recursive": {"type": "boolean"}}, "required": [], "additionalProperties": False}},
             {"type": "function", "name": "read_file", "description": "Lee un archivo de texto existente.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False}},
-            {"type": "function", "name": "create_project", "description": "Crea la carpeta raíz de un proyecto nuevo dentro del workspace. Debe usarse antes de crear los archivos de un juego/app/web nuevo.", "parameters": {"type": "object", "properties": {"project_name": {"type": "string"}}, "required": ["project_name"], "additionalProperties": False}},
+            {"type": "function", "name": "create_project", "description": "Crea la carpeta raíz de cualquier proyecto nuevo dentro del workspace.", "parameters": {"type": "object", "properties": {"project_name": {"type": "string"}}, "required": ["project_name"], "additionalProperties": False}},
             {"type": "function", "name": "write_file", "description": "Crea o reemplaza un archivo completo dentro del workspace y verifica la escritura.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"], "additionalProperties": False}},
             {"type": "function", "name": "replace_in_file", "description": "Hace un reemplazo puntual en un archivo existente y verifica el cambio.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}, "replace_all": {"type": "boolean"}}, "required": ["path", "old_text", "new_text"], "additionalProperties": False}},
-            {"type": "function", "name": "append_file", "description": "Agrega texto al final de un archivo.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"], "additionalProperties": False}},
+            {"type": "function", "name": "append_file", "description": "Agrega texto al final de un archivo y verifica el cambio.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"], "additionalProperties": False}},
             {"type": "function", "name": "make_directory", "description": "Crea una carpeta dentro del workspace.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False}},
             {"type": "function", "name": "delete_file", "description": "Elimina un archivo cuando sea necesario o solicitado.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False}},
             {"type": "function", "name": "validate_python", "description": "Comprueba la sintaxis de un archivo Python.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False}},
             {"type": "function", "name": "run_python", "description": "Ejecuta un Python no interactivo con timeout para comprobarlo.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "timeout": {"type": "integer"}}, "required": ["path"], "additionalProperties": False}},
             {"type": "function", "name": "validate_project", "description": "Valida un proyecto completo: Python, JSON y referencias locales HTML.", "parameters": {"type": "object", "properties": {"directory": {"type": "string"}}, "required": [], "additionalProperties": False}},
-            {"type": "function", "name": "run_opencode", "description": "Usa OpenCode en modo no interactivo para una reparación o tarea compleja. Solo funciona si opencode está instalado. Después valida los cambios.", "parameters": {"type": "object", "properties": {"prompt": {"type": "string"}, "agent": {"type": "string"}, "timeout": {"type": "integer"}}, "required": ["prompt"], "additionalProperties": False}},
+            {"type": "function", "name": "run_opencode", "description": "Usa OpenCode en modo no interactivo para una tarea compleja. Después Milo debe validar los cambios.", "parameters": {"type": "object", "properties": {"prompt": {"type": "string"}, "agent": {"type": "string"}, "timeout": {"type": "integer"}}, "required": ["prompt"], "additionalProperties": False}},
         ]
 
     def list_files(self, directory=".", recursive=False):
@@ -229,20 +249,7 @@ OPENCODE:
         return self.opencode.run(prompt, timeout=timeout, agent=agent)
 
     def execute_tool(self, name, args):
-        functions = {
-            "list_files": self.list_files,
-            "read_file": self.read_file,
-            "create_project": self.create_project,
-            "write_file": self.write_file,
-            "replace_in_file": self.replace_in_file,
-            "append_file": self.append_file,
-            "make_directory": self.make_directory,
-            "delete_file": self.delete_file,
-            "validate_python": self.validate_python,
-            "run_python": self.run_python,
-            "validate_project": self.validate_project,
-            "run_opencode": self.run_opencode,
-        }
+        functions = {"list_files": self.list_files, "read_file": self.read_file, "create_project": self.create_project, "write_file": self.write_file, "replace_in_file": self.replace_in_file, "append_file": self.append_file, "make_directory": self.make_directory, "delete_file": self.delete_file, "validate_python": self.validate_python, "run_python": self.run_python, "validate_project": self.validate_project, "run_opencode": self.run_opencode}
         fn = functions.get(name)
         if not fn:
             return {"ok": False, "error": f"Herramienta no encontrada: {name}"}
