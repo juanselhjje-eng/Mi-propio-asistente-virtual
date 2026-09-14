@@ -1,11 +1,15 @@
-"""Punto de entrada de JARVIS.
+"""Punto de entrada de Milo.
 
-La experiencia principal es la Hub de escritorio. El backend sigue separado
-para poder añadir despues vision y control de pantalla sin mezclarlo con la UI.
+La Hub de escritorio sigue separada del runtime para poder añadir despues
+vision, voz y control de pantalla sin mezclar esas capas con la UI.
 """
 
-from app import main
+import app as _app
+
+from runtime import install
+
+install(_app)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_app.main())
