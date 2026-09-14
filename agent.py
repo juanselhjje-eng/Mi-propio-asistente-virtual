@@ -5,9 +5,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+from opencode_adapter import OpenCodeAdapter
+
 
 class Agent:
-    """Herramientas locales para construir, validar y reparar proyectos."""
+    """Herramientas locales para construir, validar y reparar proyectos reales."""
 
     IGNORED_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", ".mypy_cache", ".pytest_cache"}
     TEXT_LIMIT = 16000
@@ -16,28 +18,36 @@ class Agent:
         self.workspace = Path(workspace or os.getenv("ASSISTANT_WORKSPACE") or os.getcwd()).resolve()
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.on_tool_result = on_tool_result
+        self.opencode = OpenCodeAdapter(self.workspace)
         self.setup_tools()
         self.messages = [{"role": "system", "content": self._system_prompt()}]
 
     def _system_prompt(self):
         return """
-Eres un agente local de programacion. Construyes proyectos reales usando herramientas.
+Eres Milo, un agente local de programación que construye proyectos reales.
 
-- Inspecciona antes de modificar.
-- En proyectos nuevos usa una arquitectura pequena y coherente.
-- Mantén referencias entre archivos correctas.
-- No inventes APIs, dependencias, assets ni resultados.
-- Si el usuario pide un juego, app o pagina, crea el proyecto y no solo un ejemplo de codigo.
-- Si faltan sprites, sonidos o imagenes, crea carpetas de recursos y explica exactamente donde ponerlos.
-- Puedes usar placeholders generados por codigo cuando permitan probar el proyecto sin assets externos.
+REGLAS DE PROYECTOS:
+- Si el usuario pide crear un juego, app, web o programa nuevo, primero decide un nombre corto y seguro para el proyecto.
+- Usa create_project para crear una carpeta propia con ese nombre. NO pongas un proyecto nuevo directamente en la raíz del workspace.
+- Después crea dentro de esa carpeta todos los archivos necesarios: main, módulos, assets, configuración, README y requirements/package files cuando correspondan.
+- Mantén imports, rutas y referencias entre archivos correctos.
+- Para juegos Python/Pygame, normalmente usa main.py y carpetas como assets/ cuando hagan falta.
+- Si faltan sprites, sonidos o imágenes, crea la estructura de assets y usa placeholders generados por código cuando sea posible.
+- Si el usuario pide corregir algo, inspecciona primero el proyecto existente y modifica sus archivos reales; no generes otro proyecto paralelo salvo que sea necesario.
+- Si hay varios proyectos, identifica el que corresponde por el nombre mencionado en la conversación o inspeccionando el workspace.
+
+VERIFICACIÓN:
 - Usa validate_project al terminar proyectos de varios archivos.
-- Usa validate_python y run_python cuando corresponda y sea seguro.
-- No ejecutes programas interactivos que esperen entrada indefinidamente.
-- Repara errores basandote en los mensajes reales de las herramientas.
+- Usa validate_python y run_python cuando sea seguro y no sea una aplicación gráfica que deba permanecer abierta.
 - No afirmes que algo funciona sin comprobarlo.
+- Si una herramienta devuelve ERROR, corrige el problema y vuelve a validar.
+- No inventes APIs, dependencias, assets, archivos ni resultados.
 - No borres archivos salvo que sea necesario o solicitado.
 
-El modelo de lenguaje es la inteligencia principal. No necesitas una red neuronal adicional para programar: solo usa modelos adicionales si el usuario pide explicitamente una tarea de ML.
+OPENCODE:
+- OpenCode es un motor auxiliar opcional, no un reemplazo de Milo.
+- Si OpenCode está instalado, puedes usar run_opencode para reparaciones complejas o cuando necesites su agente build.
+- Después de usar OpenCode debes inspeccionar/validar los cambios con las herramientas de Milo.
 """.strip()
 
     def _safe_path(self, path):
@@ -52,16 +62,18 @@ El modelo de lenguaje es la inteligencia principal. No necesitas una red neurona
 
     def setup_tools(self):
         self.tools = [
-            {"type": "function", "name": "list_files", "description": "Lista archivos y carpetas del workspace, ignorando carpetas pesadas.", "parameters": {"type": "object", "properties": {"directory": {"type": "string"}, "recursive": {"type": "boolean"}}, "required": [], "additionalProperties": False}},
-            {"type": "function", "name": "read_file", "description": "Lee un archivo de texto existente. Devuelve una parte acotada para no llenar el contexto.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False}},
-            {"type": "function", "name": "write_file", "description": "Crea o reemplaza un archivo completo dentro del workspace y comprueba que quedo escrito.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"], "additionalProperties": False}},
-            {"type": "function", "name": "replace_in_file", "description": "Hace un reemplazo puntual en un archivo existente y comprueba el cambio.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}, "replace_all": {"type": "boolean"}}, "required": ["path", "old_text", "new_text"], "additionalProperties": False}},
-            {"type": "function", "name": "append_file", "description": "Agrega texto al final de un archivo y comprueba el cambio.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"], "additionalProperties": False}},
+            {"type": "function", "name": "list_files", "description": "Lista archivos y carpetas del workspace.", "parameters": {"type": "object", "properties": {"directory": {"type": "string"}, "recursive": {"type": "boolean"}}, "required": [], "additionalProperties": False}},
+            {"type": "function", "name": "read_file", "description": "Lee un archivo de texto existente.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False}},
+            {"type": "function", "name": "create_project", "description": "Crea la carpeta raíz de un proyecto nuevo dentro del workspace. Debe usarse antes de crear los archivos de un juego/app/web nuevo.", "parameters": {"type": "object", "properties": {"project_name": {"type": "string"}}, "required": ["project_name"], "additionalProperties": False}},
+            {"type": "function", "name": "write_file", "description": "Crea o reemplaza un archivo completo dentro del workspace y verifica la escritura.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"], "additionalProperties": False}},
+            {"type": "function", "name": "replace_in_file", "description": "Hace un reemplazo puntual en un archivo existente y verifica el cambio.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}, "replace_all": {"type": "boolean"}}, "required": ["path", "old_text", "new_text"], "additionalProperties": False}},
+            {"type": "function", "name": "append_file", "description": "Agrega texto al final de un archivo.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"], "additionalProperties": False}},
             {"type": "function", "name": "make_directory", "description": "Crea una carpeta dentro del workspace.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False}},
-            {"type": "function", "name": "delete_file", "description": "Elimina un archivo cuando sea necesario para la peticion.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False}},
-            {"type": "function", "name": "validate_python", "description": "Comprueba la sintaxis de un .py con py_compile.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False}},
-            {"type": "function", "name": "run_python", "description": "Ejecuta un .py no interactivo para comprobarlo. Timeout maximo 20 segundos.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "timeout": {"type": "integer"}}, "required": ["path"], "additionalProperties": False}},
-            {"type": "function", "name": "validate_project", "description": "Revisa un proyecto completo: Python, JSON y referencias locales HTML/CSS/JS. Devuelve errores concretos.", "parameters": {"type": "object", "properties": {"directory": {"type": "string"}}, "required": [], "additionalProperties": False}},
+            {"type": "function", "name": "delete_file", "description": "Elimina un archivo cuando sea necesario o solicitado.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False}},
+            {"type": "function", "name": "validate_python", "description": "Comprueba la sintaxis de un archivo Python.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": False}},
+            {"type": "function", "name": "run_python", "description": "Ejecuta un Python no interactivo con timeout para comprobarlo.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "timeout": {"type": "integer"}}, "required": ["path"], "additionalProperties": False}},
+            {"type": "function", "name": "validate_project", "description": "Valida un proyecto completo: Python, JSON y referencias locales HTML.", "parameters": {"type": "object", "properties": {"directory": {"type": "string"}}, "required": [], "additionalProperties": False}},
+            {"type": "function", "name": "run_opencode", "description": "Usa OpenCode en modo no interactivo para una reparación o tarea compleja. Solo funciona si opencode está instalado. Después valida los cambios.", "parameters": {"type": "object", "properties": {"prompt": {"type": "string"}, "agent": {"type": "string"}, "timeout": {"type": "integer"}}, "required": ["prompt"], "additionalProperties": False}},
         ]
 
     def list_files(self, directory=".", recursive=False):
@@ -87,6 +99,22 @@ El modelo de lenguaje es la inteligencia principal. No necesitas una red neurona
             return {"ok": True, "truncated": True, "content": text[:self.TEXT_LIMIT], "total_chars": len(text)}
         return {"ok": True, "content": text}
 
+    def _project_folder_name(self, name):
+        name = re.sub(r"[^A-Za-z0-9áéíóúÁÉÍÓÚñÑ _-]", "", str(name)).strip()
+        name = re.sub(r"\s+", " ", name)
+        if not name:
+            raise ValueError("El nombre del proyecto está vacío.")
+        if name in {".", ".."} or len(name) > 80:
+            raise ValueError("Nombre de proyecto no válido.")
+        return name
+
+    def create_project(self, project_name):
+        folder_name = self._project_folder_name(project_name)
+        target = self._safe_path(folder_name)
+        existed = target.exists()
+        target.mkdir(parents=True, exist_ok=True)
+        return {"ok": True, "path": str(target.relative_to(self.workspace)), "created": not existed, "verified": target.is_dir()}
+
     def write_file(self, path, content):
         target = self._safe_path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -95,8 +123,7 @@ El modelo de lenguaje es la inteligencia principal. No necesitas una red neurona
         verified = target.is_file() and target.read_text(encoding="utf-8") == content
         if not verified:
             return {"ok": False, "error": f"No se pudo verificar la escritura de: {path}"}
-        action = "actualizado" if existed else "creado"
-        return {"ok": True, "path": str(target.relative_to(self.workspace)), "action": action, "bytes": len(content.encode("utf-8")), "verified": True}
+        return {"ok": True, "path": str(target.relative_to(self.workspace)), "action": "actualizado" if existed else "creado", "bytes": len(content.encode("utf-8")), "verified": True}
 
     def replace_in_file(self, path, old_text, new_text, replace_all=False):
         target = self._safe_path(path)
@@ -119,9 +146,7 @@ El modelo de lenguaje es la inteligencia principal. No necesitas una red neurona
         target.parent.mkdir(parents=True, exist_ok=True)
         with target.open("a", encoding="utf-8", newline="") as file:
             file.write(content)
-        if not target.is_file() or not target.read_text(encoding="utf-8").endswith(content):
-            return {"ok": False, "error": f"No se pudo verificar el cambio en: {path}"}
-        return {"ok": True, "path": str(target.relative_to(self.workspace)), "verified": True}
+        return {"ok": True, "path": str(target.relative_to(self.workspace)), "verified": target.is_file() and target.read_text(encoding="utf-8").endswith(content)}
 
     def make_directory(self, path):
         target = self._safe_path(path)
@@ -153,7 +178,7 @@ El modelo de lenguaje es la inteligencia principal. No necesitas una red neurona
             return {"ok": False, "error": f"No existe un archivo Python valido: {path}"}
         timeout = max(1, min(int(timeout), 20))
         try:
-            completed = subprocess.run([sys.executable, str(target)], cwd=self.workspace, capture_output=True, text=True, timeout=timeout)
+            completed = subprocess.run([sys.executable, str(target)], cwd=target.parent, capture_output=True, text=True, timeout=timeout)
             return {"ok": True, "returncode": completed.returncode, "stdout": completed.stdout[-6000:], "stderr": completed.stderr[-6000:]}
         except subprocess.TimeoutExpired as exc:
             return {"ok": False, "error": f"La ejecucion supero {timeout}s", "stdout": str(exc.stdout or "")[-2000:], "stderr": str(exc.stderr or "")[-2000:]}
@@ -179,7 +204,6 @@ El modelo de lenguaje es la inteligencia principal. No necesitas una red neurona
                     json.loads(path.read_text(encoding="utf-8"))
                 except Exception as exc:
                     errors.append(f"{rel}: JSON invalido: {exc}")
-
         for path in files:
             if path.suffix.lower() not in {".html", ".htm"}:
                 continue
@@ -197,11 +221,28 @@ El modelo de lenguaje es la inteligencia principal. No necesitas una red neurona
                     continue
                 if not candidate.exists():
                     errors.append(f"{path.relative_to(self.workspace)}: falta el recurso referenciado: {ref}")
-
         return {"ok": True, "valid": not errors, "checks": checks, "errors": errors[:50], "files": len(files)}
 
+    def run_opencode(self, prompt, timeout=180, agent="build"):
+        if not self.opencode.available:
+            return {"ok": False, "error": "OpenCode no está instalado o no está en PATH."}
+        return self.opencode.run(prompt, timeout=timeout, agent=agent)
+
     def execute_tool(self, name, args):
-        functions = {"list_files": self.list_files, "read_file": self.read_file, "write_file": self.write_file, "replace_in_file": self.replace_in_file, "append_file": self.append_file, "make_directory": self.make_directory, "delete_file": self.delete_file, "validate_python": self.validate_python, "run_python": self.run_python, "validate_project": self.validate_project}
+        functions = {
+            "list_files": self.list_files,
+            "read_file": self.read_file,
+            "create_project": self.create_project,
+            "write_file": self.write_file,
+            "replace_in_file": self.replace_in_file,
+            "append_file": self.append_file,
+            "make_directory": self.make_directory,
+            "delete_file": self.delete_file,
+            "validate_python": self.validate_python,
+            "run_python": self.run_python,
+            "validate_project": self.validate_project,
+            "run_opencode": self.run_opencode,
+        }
         fn = functions.get(name)
         if not fn:
             return {"ok": False, "error": f"Herramienta no encontrada: {name}"}
@@ -241,21 +282,21 @@ El modelo de lenguaje es la inteligencia principal. No necesitas una red neurona
                 result = self.execute_tool(name, args)
             except Exception as exc:
                 result = {"ok": False, "error": f"Error procesando argumentos: {type(exc).__name__}: {exc}"}
-
             if result.get("ok"):
-                if name == "write_file":
+                if name == "create_project":
+                    message = f"[PROYECTO] carpeta: {result['path']} · verificada"
+                elif name == "write_file":
                     message = f"[ARCHIVO] {result['action']}: {result['path']} · verificado"
                 elif name == "replace_in_file":
                     message = f"[ARCHIVO] modificado: {result['path']} · verificado"
-                elif name == "append_file":
-                    message = f"[ARCHIVO] actualizado: {result['path']} · verificado"
                 elif name == "make_directory":
                     message = f"[CARPETA] creada: {result['path']} · verificado"
                 elif name == "delete_file":
                     message = f"[ARCHIVO] eliminado: {result['deleted']} · verificado"
                 elif name in {"validate_python", "validate_project"}:
-                    state = "OK" if result.get("valid", True) else "ERROR"
-                    message = f"[PRUEBA] {name}: {state}"
+                    message = f"[PRUEBA] {name}: {'OK' if result.get('valid', True) else 'ERROR'}"
+                elif name == "run_opencode":
+                    message = f"[OPENCODE] {'OK' if result.get('ok') else 'ERROR'} · cambios revisados después"
                 else:
                     message = f"[HERRAMIENTA] {name}: OK"
             else:
@@ -266,9 +307,4 @@ El modelo de lenguaje es la inteligencia principal. No necesitas una red neurona
                     self.on_tool_result(message, result)
                 except Exception:
                     pass
-
-            self.messages.append({
-                "type": "function_call_output",
-                "call_id": getattr(call, "call_id", getattr(call, "id", "")),
-                "output": json.dumps(result, ensure_ascii=False),
-            })
+            self.messages.append({"type": "function_call_output", "call_id": getattr(call, "call_id", getattr(call, "id", "")), "output": json.dumps(result, ensure_ascii=False)})
